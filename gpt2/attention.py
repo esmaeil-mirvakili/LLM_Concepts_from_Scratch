@@ -18,6 +18,7 @@ class CausalSelfAttention(nn.Module):
         self.use_fused = use_fused and hasattr(F, "scaled_dot_product_attention")
         self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim)
         self.o_proj = nn.Linear(embed_dim, embed_dim)
+        setattr(self.o_proj, "SCALE_INIT", 1)
         self.register_buffer(
             "mask",
             (
