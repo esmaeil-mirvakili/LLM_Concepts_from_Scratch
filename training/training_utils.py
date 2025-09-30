@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.amp import autocast, GradScaler
 from loguru import logger
+from tqdm import tqdm
 
 
 Batch = Union[Dict, List, Tensor, Tuple]
@@ -122,16 +123,21 @@ class Trainer:
                 callback.on_epoch_start(epoch, self, **kwargs)
             train_logs = self._train_epoch(epoch, train_dataloader, **kwargs)
             epoch_logs = {"epoch": epoch, **train_logs}
-            if val_dataloader is not None and self.evaluate_every is not None and (
-                epoch % self.evaluate_every == 0
+            if (
+                val_dataloader is not None
+                and self.evaluate_every is not None
+                and (epoch % self.evaluate_every == 0)
             ):
                 for callback in self.callbacks:
                     callback.on_validation_start(self, **kwargs)
-                val_logs = self.evaluate(
-                    val_dataloader,
-                    max_steps=self.evaluate_max_steps,
-                    **kwargs,
-                ) or {}
+                val_logs = (
+                    self.evaluate(
+                        val_dataloader,
+                        max_steps=self.evaluate_max_steps,
+                        **kwargs,
+                    )
+                    or {}
+                )
                 for callback in self.callbacks:
                     callback.on_validation_end(self, val_logs, **kwargs)
                 for k, v in val_logs.items():
@@ -163,7 +169,9 @@ class Trainer:
                     pass
 
         steps = 0
-        for batch in dataloader:
+        for batch in tqdm(
+            dataloader, total=len(dataloader), desc=f"Evaluation"
+        ):
             out = self._process_batch(self.global_step, batch, **kwargs)
             loss = out.get("loss")
             if loss is None:
@@ -182,7 +190,9 @@ class Trainer:
                 )
                 for name, metric in self.metric_fns.items():
                     try:
-                        if all(hasattr(metric, a) for a in ("update", "compute", "reset")):
+                        if all(
+                            hasattr(metric, a) for a in ("update", "compute", "reset")
+                        ):
                             (
                                 metric.update(preds, targets)
                                 if isinstance(targets, torch.Tensor)
@@ -223,10 +233,18 @@ class Trainer:
                 try:
                     val = m.compute()
                     if isinstance(val, torch.Tensor):
-                        val = val.item() if val.numel() == 1 else val.float().mean().item()
+                        val = (
+                            val.item()
+                            if val.numel() == 1
+                            else val.float().mean().item()
+                        )
                     logs[name] = float(val)
                 except Exception:
                     pass
+        logs_str = " | ".join([f"{name}: {val}" for name, val in logs.items()])
+        logger.info(
+            f"Evaluation - {logs_str}"
+        )
         return logs
 
     @torch.inference_mode()
@@ -287,7 +305,11 @@ class Trainer:
             total_batches = len(train_dataloader)
         except:
             total_batches = None
-        for batch_idx, batch in enumerate(train_dataloader, start=1):
+        for batch_idx, batch in tqdm(
+            enumerate(train_dataloader, start=1),
+            total=len(train_dataloader),
+            desc=f"Training epoch {epoch}",
+        ):
             self.micro_step += 1
             for callback in self.callbacks:
                 callback.on_batch_start(self.micro_step, self, logs={})
@@ -325,7 +347,11 @@ class Trainer:
                 with torch.no_grad():
                     for name, metric in self.metric_fns.items():
                         # Stateful metric: expects update() / compute() / reset()
-                        if hasattr(metric, "update") and hasattr(metric, "compute") and hasattr(metric, "reset"):
+                        if (
+                            hasattr(metric, "update")
+                            and hasattr(metric, "compute")
+                            and hasattr(metric, "reset")
+                        ):
                             try:
                                 if isinstance(targets, torch.Tensor):
                                     metric.update(preds.detach(), targets.detach())
@@ -344,7 +370,11 @@ class Trainer:
                                     val = metric(preds.detach())
                                 if isinstance(val, torch.Tensor):
                                     val = val.detach()
-                                    val = val.item() if val.numel() == 1 else float(val.float().mean().item())
+                                    val = (
+                                        val.item()
+                                        if val.numel() == 1
+                                        else float(val.float().mean().item())
+                                    )
                                 else:
                                     val = float(val)
                                 metric_sums[name] += val * bsz
@@ -367,12 +397,20 @@ class Trainer:
                 metric_avgs[name] = metric_sums[name] / metric_counts[name]
         # Compute stateful metrics at epoch end and merge into logs
         for name, metric in self.metric_fns.items():
-            if hasattr(metric, "compute") and hasattr(metric, "update") and hasattr(metric, "reset"):
+            if (
+                hasattr(metric, "compute")
+                and hasattr(metric, "update")
+                and hasattr(metric, "reset")
+            ):
                 try:
                     val = metric.compute()
                     if isinstance(val, torch.Tensor):
                         val = val.detach()
-                        val = val.item() if val.numel() == 1 else float(val.float().mean().item())
+                        val = (
+                            val.item()
+                            if val.numel() == 1
+                            else float(val.float().mean().item())
+                        )
                     else:
                         val = float(val)
                     metric_avgs[name] = val
@@ -391,8 +429,9 @@ class Trainer:
             **metric_avgs,
         }
         if self.log_every and (self.micro_step % self.log_every == 0):
+            logs_str = " | ".join([f"{name}: {val}" for name, val in epoch_logs.items()])
             logger.info(
-                f"Epoch {epoch} - Micro Step {self.micro_step} - Loss: {epoch_logs['loss']:.4f}"
+                f"Epoch {epoch} - Micro Step {self.micro_step} - {logs_str}"
             )
         return epoch_logs
 
@@ -410,7 +449,11 @@ class Trainer:
         targets: Optional[torch.Tensor] = None
         if isinstance(prepared, dict):
             tgt_key = next(
-                (k for k in ("labels", "label", "y", "target", "targets") if k in prepared),
+                (
+                    k
+                    for k in ("labels", "label", "y", "target", "targets")
+                    if k in prepared
+                ),
                 None,
             )
             if tgt_key is not None:

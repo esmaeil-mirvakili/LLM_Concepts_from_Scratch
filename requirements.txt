@@ -1,4 +1,4 @@
-transformers>=4.44,<5
+transformers>=4.41,<4.50
 datasets>=3,<4
 tiktoken>=0.7,<0.8
 tqdm>=4.66.1
